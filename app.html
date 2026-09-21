@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SettleUp - split group expenses with the fewest possible paybacks</title>
+<style>
+  :root { --bg:#10151c; --panel:#161d27; --line:#283242; --text:#eef3fa; --dim:#94a3b5; --accent:#7ab8ff; --good:#8be0a4; --bad:#ff8f7a; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:26px 14px 44px; }
+  h1 { font-size:30px; }
+  .sub { color:var(--dim); margin:6px 0 18px; font-size:14px; text-align:center; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; width:min(620px, 94vw); margin-bottom:14px; }
+  .card h2 { font-size:15px; margin-bottom:10px; }
+  .grid { display:grid; grid-template-columns:2fr 1fr; gap:10px; }
+  input, select { background:#0c1117; border:1px solid var(--line); border-radius:8px; color:var(--text); padding:9px 12px; font-size:14px; width:100%; }
+  label { color:var(--dim); font-size:12px; display:block; margin-bottom:4px; }
+  button { background:var(--accent); color:#10151c; border:none; border-radius:8px; padding:10px 18px; font-size:14px; font-weight:700; cursor:pointer; margin-top:10px; }
+  .people { display:flex; gap:6px; flex-wrap:wrap; }
+  .pill { background:#0c1117; border:1px solid var(--line); border-radius:20px; padding:5px 12px; font-size:13px; display:inline-flex; align-items:center; gap:6px; }
+  .pill .x { color:var(--dim); cursor:pointer; }
+  .pill .x:hover { color:var(--bad); }
+  .checks { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .chk { background:#0c1117; border:1px solid var(--line); border-radius:8px; padding:5px 10px; font-size:13px; cursor:pointer; user-select:none; }
+  .chk.on { background:var(--accent); color:#10151c; border-color:var(--accent); font-weight:700; }
+  .bal { display:flex; justify-content:space-between; align-items:center; background:#0c1117; border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin-top:6px; font-size:14px; }
+  .pos { color:var(--good); font-weight:700; } .neg { color:var(--bad); font-weight:700; }
+  .xfer { background:#0c1117; border-left:4px solid var(--good); border-radius:8px; padding:10px 12px; margin-top:6px; font-size:15px; }
+  .xfer b { color:var(--good); }
+  .exp { display:flex; justify-content:space-between; align-items:center; background:#0c1117; border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin-top:6px; font-size:13px; color:var(--dim); }
+  .exp .rm { cursor:pointer; color:var(--dim); }
+  .exp .rm:hover { color:var(--bad); }
+  .empty { color:var(--dim); text-align:center; padding:10px 0; font-size:14px; }
+  .copy { background:#39434f; color:var(--text); }
+  .foot { margin-top:14px; color:var(--dim); font-size:13px; }
+  a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<h1>SettleUp</h1>
+<div class="sub">nine shared dinners don't need nine paybacks. net it all out, then make the fewest transfers.</div>
+
+<div class="card">
+  <h2>People</h2>
+  <div class="grid">
+    <div><label>Name</label><input id="p-name" placeholder="e.g. Dana"></div>
+    <div style="align-self:end"><button id="add-person" style="margin-top:0;width:100%">Add</button></div>
+  </div>
+  <div class="people" id="people" style="margin-top:10px"></div>
+</div>
+
+<div class="card">
+  <h2>Add an expense</h2>
+  <div class="grid">
+    <div><label>What?</label><input id="e-desc" placeholder="e.g. Dinner at Luigi's"></div>
+    <div><label>Amount ($)</label><input id="e-amt" type="number" min="0" step="0.01" placeholder="48.60"></div>
+  </div>
+  <div class="grid" style="margin-top:10px">
+    <div><label>Paid by</label><select id="e-payer"></select></div>
+    <div style="align-self:end;color:var(--dim);font-size:12px">split among:</div>
+  </div>
+  <div class="checks" id="e-among"></div>
+  <button id="add-expense">Add expense</button>
+</div>
+
+<div class="card">
+  <h2>Balances</h2>
+  <div id="balances"><div class="empty">Add people and expenses.</div></div>
+</div>
+
+<div class="card">
+  <h2>Settle up</h2>
+  <div id="plan"><div class="empty">The fewest-transfers payback plan appears here.</div></div>
+  <button class="copy" id="copy">Copy plan to share</button>
+</div>
+
+<div class="card">
+  <h2>Expense log</h2>
+  <div id="log"><div class="empty">Nothing yet.</div></div>
+</div>
+
+<div class="foot"><a href="index.html">&larr; about</a></div>
+
+<script src="engine.js?v=1"></script>
+<script>
+(function () {
+  var KEY = 'settleup-v1';
+  var state = { people: [], expenses: [] }; // expenses: {id, desc, paidBy, amount, among:[names]}
+  var checks = {}; // name -> bool for the split-among toggles
+
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+  function load() { try { var s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.people)) state = s; } catch (e) {} }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  function renderPeople() {
+    var el = document.getElementById('people');
+    el.innerHTML = '';
+    state.people.forEach(function (p) {
+      var pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.innerHTML = esc(p) + ' <span class="x" data-rm="' + esc(p) + '">&times;</span>';
+      el.appendChild(pill);
+    });
+    el.querySelectorAll('.x').forEach(function (x) {
+      x.addEventListener('click', function () {
+        var name = x.getAttribute('data-rm');
+        state.people = state.people.filter(function (p) { return p !== name; });
+        state.expenses = state.expenses.filter(function (e) { return e.paidBy !== name; });
+        state.expenses.forEach(function (e) { e.among = e.among.filter(function (a) { return a !== name; }); });
+        state.expenses = state.expenses.filter(function (e) { return e.among.length > 0; });
+        delete checks[name];
+        save(); renderAll();
+      });
+    });
+    var payer = document.getElementById('e-payer');
+    payer.innerHTML = '';
+    state.people.forEach(function (p) {
+      var o = document.createElement('option');
+      o.value = p; o.textContent = p;
+      payer.appendChild(o);
+    });
+    var am = document.getElementById('e-among');
+    am.innerHTML = '';
+    state.people.forEach(function (p) {
+      if (!(p in checks)) checks[p] = true;
+      var c = document.createElement('span');
+      c.className = 'chk' + (checks[p] ? ' on' : '');
+      c.textContent = p;
+      c.addEventListener('click', function () {
+        checks[p] = !checks[p];
+        c.className = 'chk' + (checks[p] ? ' on' : '');
+      });
+      am.appendChild(c);
+    });
+  }
+
+  function currentPlan() {
+    if (!state.people.length) return null;
+    var net = SettleUp.balances(state.people, state.expenses);
+    return { net: net, plan: SettleUp.settle(net) };
+  }
+
+  function renderBalances() {
+    var el = document.getElementById('balances');
+    if (!state.people.length) { el.innerHTML = '<div class="empty">Add people and expenses.</div>'; return; }
+    var s = SettleUp.summary(state.people, state.expenses);
+    el.innerHTML = '';
+    state.people.forEach(function (p) {
+      var d = document.createElement('div');
+      d.className = 'bal';
+      var net = s[p].net;
+      var netStr = net > 0 ? '<span class="pos">gets back $' + net.toFixed(2) + '</span>'
+        : net < 0 ? '<span class="neg">owes $' + Math.abs(net).toFixed(2) + '</span>'
+        : '<span style="color:var(--dim)">even</span>';
+      d.innerHTML = '<span>' + esc(p) + ' <span style="color:var(--dim);font-size:12px">paid $' + s[p].paid.toFixed(2) + ' / share $' + s[p].share.toFixed(2) + '</span></span>' + netStr;
+      el.appendChild(d);
+    });
+  }
+
+  function planText(cp) {
+    if (!cp.plan.length) return 'Everyone is already even.';
+    return cp.plan.map(function (x) { return x.from + ' pays ' + x.to + ' $' + x.amount.toFixed(2); }).join('\n');
+  }
+
+  function renderPlan() {
+    var el = document.getElementById('plan');
+    var cp = currentPlan();
+    if (!cp || !state.expenses.length) { el.innerHTML = '<div class="empty">The fewest-transfers payback plan appears here.</div>'; return; }
+    if (!cp.plan.length) { el.innerHTML = '<div class="empty">Everyone is already even.</div>'; return; }
+    el.innerHTML = '';
+    cp.plan.forEach(function (x) {
+      var d = document.createElement('div');
+      d.className = 'xfer';
+      d.innerHTML = esc(x.from) + ' &rarr; ' + esc(x.to) + ': <b>$' + x.amount.toFixed(2) + '</b>';
+      el.appendChild(d);
+    });
+    var n = document.createElement('div');
+    n.style.cssText = 'color:var(--dim);font-size:12px;margin-top:8px';
+    n.textContent = cp.plan.length + ' transfer' + (cp.plan.length === 1 ? '' : 's') + ' settles everything.';
+    el.appendChild(n);
+  }
+
+  function renderLog() {
+    var el = document.getElementById('log');
+    if (!state.expenses.length) { el.innerHTML = '<div class="empty">Nothing yet.</div>'; return; }
+    el.innerHTML = '';
+    state.expenses.slice().reverse().forEach(function (e) {
+      var d = document.createElement('div');
+      d.className = 'exp';
+      d.innerHTML = '<span><b style="color:var(--text)">' + esc(e.desc || 'expense') + '</b> - $' + e.amount.toFixed(2) + ' by ' + esc(e.paidBy) + ', split ' + e.among.length + ' ways</span><span class="rm" data-id="' + e.id + '">remove</span>';
+      el.appendChild(d);
+    });
+    el.querySelectorAll('.rm').forEach(function (x) {
+      x.addEventListener('click', function () {
+        state.expenses = state.expenses.filter(function (e) { return e.id !== x.getAttribute('data-id'); });
+        save(); renderAll();
+      });
+    });
+  }
+
+  function renderAll() { renderPeople(); renderBalances(); renderPlan(); renderLog(); }
+
+  document.getElementById('add-person').addEventListener('click', function () {
+    var name = document.getElementById('p-name').value.trim();
+    if (!name || state.people.indexOf(name) >= 0) return;
+    state.people.push(name);
+    document.getElementById('p-name').value = '';
+    save(); renderAll();
+  });
+
+  document.getElementById('add-expense').addEventListener('click', function () {
+    var amt = parseFloat(document.getElementById('e-amt').value);
+    var payer = document.getElementById('e-payer').value;
+    var among = state.people.filter(function (p) { return checks[p]; });
+    if (!(amt > 0) || !payer || !among.length) return;
+    state.expenses.push({
+      id: 'e' + Date.now(),
+      desc: document.getElementById('e-desc').value.trim(),
+      paidBy: payer,
+      amount: Math.round(amt * 100) / 100,
+      among: among
+    });
+    document.getElementById('e-desc').value = '';
+    document.getElementById('e-amt').value = '';
+    save(); renderAll();
+  });
+
+  document.getElementById('copy').addEventListener('click', function () {
+    var cp = currentPlan();
+    if (!cp) return;
+    var text = 'SettleUp plan:\n' + planText(cp);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text);
+      document.getElementById('copy').textContent = 'Copied!';
+      setTimeout(function () { document.getElementById('copy').textContent = 'Copy plan to share'; }, 1500);
+    }
+  });
+
+  // test hook
+  window.__su = {
+    clear: function () { state = { people: [], expenses: [] }; checks = {}; save(); renderAll(); },
+    setup: function (people, expenses) {
+      state = { people: people.slice(), expenses: expenses.map(function (e, i) { e.id = 'e' + i; return e; }) };
+      checks = {}; save(); renderAll();
+    },
+    read: function () {
+      return {
+        balances: document.getElementById('balances').textContent,
+        plan: Array.prototype.map.call(document.querySelectorAll('#plan .xfer'), function (d) { return d.textContent; }),
+        footer: (document.querySelector('#plan div:last-child') || {}).textContent || ''
+      };
+    }
+  };
+
+  load();
+  renderAll();
+})();
+</script>
+</body>
+</html>
